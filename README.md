@@ -30,9 +30,8 @@ AI Engine: Groq AI (Model: llama-3.3-70b-versatile).
 
 1. Clone the Repository
 
-git clone [https://github.com/Shlok0005/Msme-Sahayak.git](https://github.com/Shlok0005/Msme-Sahayak.git)
-cd Msme-Sahayak
-
+git clone git clone https://github.com/SrijanSingh2006/msme-sahayak.git
+cd msme-sahayak
 
 2. Backend Setup
 
