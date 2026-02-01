@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MSME Sahayak - Your Digital Munshi</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        .brand-gradient-text { background: -webkit-linear-gradient(45deg, #3b82f6, #1d4ed8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .page { display: none; }
+        .page.active { display: block; animation: fadeIn 0.5s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .auth-card { perspective: 1000px; }
+        .auth-card-inner { position: relative; width: 100%; height: 100%; transition: transform 0.6s; transform-style: preserve-3d; }
+        .auth-card.is-flipped .auth-card-inner { transform: rotateY(180deg); }
+        .auth-card-front, .auth-card-back { position: absolute; width: 100%; height: 100%; -webkit-backface-visibility: hidden; backface-visibility: hidden; }
+        .auth-card-back { transform: rotateY(180deg); }
+        .spinner { border: 2px solid #f3f3f3; border-top: 2px solid #3498db; border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .skeleton { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .nav-link.active { background-color: #eff6ff; color: #2563eb; font-weight: 600; }
+        .modal-overlay { animation: fadeIn 0.3s ease-in-out; }
+        .modal-content { animation: slideUp 0.3s ease-in-out; }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .prose h3 { font-size: 1.25rem; font-weight: bold; margin-top: 1rem; margin-bottom: 0.5rem; }
+        .prose ul { list-style-position: inside; }
+        .prose li { margin-left: 1rem; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="app-root"></div>
+    <div id="notification-container" class="fixed top-5 right-5 z-50 space-y-3"></div>
+    <div id="modal-container"></div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const { jsPDF } = window.jspdf;
+
+        // --- STATE MANAGEMENT ---
+        const API_BASE_URL = 'http://localhost:5000/api';
+        const appRoot = document.getElementById('app-root');
+        let cashFlowChartInstance = null;
+        let transactionsCache = [];
+        let schemesCache = [];
+        let employeesCache = [
+            { id: 1, name: 'Suresh Kumar', salary: 25000 },
+            { id: 2, name: 'Priya Singh', salary: 50000 },
+        ];
+        let currentLanguage = 'en';
+        
+        // --- TRANSLATIONS (EXPANDED) ---
+        const translations = {
+            en: {
+                dashboard: "Dashboard",
+                digitalKhata: "Digital Khata",
+                payrollPrep: "Payroll Prep",
+                loanAdvisor: "AI Loan Advisor",
+                schemeFinder: "AI Scheme Finder",
+                logout: "Logout",
+                todaysIncome: "Today's Income",
+                todaysExpenses: "Today's Expenses",
+                monthToDateBalance: "Month-to-Date Balance",
+                addEntry: "Add Entry",
+                generateReport: "Generate Report",
+                downloadExcel: "Download as Excel",
+                manageEmployees: "Manage Employees",
+                selectAll: "Select All"
+            },
+            hi: {
+                dashboard: "डैशबोर्ड",
+                digitalKhata: "डिजिटल खाता",
+                payrollPrep: "पेरोल तैयारी",
+                loanAdvisor: "एआई ऋण सलाहकार",
+                schemeFinder: "एआई योजना खोजक",
+                logout: "लॉग आउट",
+                todaysIncome: "आज की आमदनी",
+                todaysExpenses: "आज के खर्चे",
+                monthToDateBalance: "मासिक शेष",
+                addEntry: "एंट्री जोड़ें",
+                generateReport: "रिपोर्ट बनाएं",
+                downloadExcel: "एक्सेल डाउनलोड करें",
+                manageEmployees: "कर्मचारी प्रबंधित करें",
+                selectAll: "सभी का चयन करे"
+            }
+        };
+
+        // --- ICONS ---
+        const ICONS = {
+            dashboard: `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>`,
+            khata: `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10h14"></path></svg>`,
+            payroll: `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>`,
+            credit: `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`,
+            schemes: `<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path></svg>`,
+            empty: `<svg class="w-16 h-16 mx-auto text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>`,
+            check: `<svg class="w-5 h-5 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>`
+        };
+
+        // --- API HELPERS ---
+        const api = {
+            async request(endpoint, { body, method = 'GET' } = {}) {
+                const headers = { 'Content-Type': 'application/json' };
+                const token = localStorage.getItem('authToken');
+                if (token) {
+                    headers['Authorization'] = `Bearer ${token}`;
+                }
+                try {
+                    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                        method,
+                        headers,
+                        body: body ? JSON.stringify(body) : undefined,
+                    });
+
+                    if (!response.ok) {
+                        let errorData;
+                        try {
+                            errorData = await response.json();
+                        } catch (e) {
+                            throw new Error(response.statusText || 'An unknown server error occurred.');
+                        }
+                        throw new Error(errorData.message || 'An error occurred');
+                    }
+                    return await response.json();
+                } catch (error) {
+                    console.error('API Error:', error);
+                    throw error;
+                }
+            },
+            login: (email, password) => api.request('/auth/login', { method: 'POST', body: { email, password } }),
+            register: (email, password) => api.request('/auth/register', { method: 'POST', body: { email, password } }),
+            getTransactions: () => api.request('/data/transactions'),
+            addTransaction: (data) => api.request('/data/transactions', { method: 'POST', body: data }),
+            deleteTransaction: (id) => api.request(`/data/transactions/${id}`, { method: 'DELETE' }),
+            checkEligibility: (data) => api.request('/ai/check-eligibility', { method: 'POST', body: data }),
+            findSchemes: (data) => api.request('/ai/find-schemes', { method: 'POST', body: data }),
+            getComplianceReport: (data) => api.request('/data/compliance-report', { method: 'POST', body: data }),
+        };
+
+        // --- UI & NOTIFICATIONS ---
+        function showNotification(message, type = 'success') {
+            const container = document.getElementById('notification-container');
+            const bgColor = type === 'success' ? 'bg-green-500' : 'bg-red-500';
+            const notification = document.createElement('div');
+            notification.className = `w-80 p-4 rounded-lg text-white shadow-lg transform transition-all duration-300 translate-x-full ${bgColor}`;
+            notification.textContent = message;
+            container.appendChild(notification);
+            setTimeout(() => notification.classList.remove('translate-x-full'), 10);
+            setTimeout(() => {
+                notification.classList.add('translate-x-full');
+                setTimeout(() => notification.remove(), 300);
+            }, 4000);
+        }
+
+        function toggleButtonLoading(button, isLoading) {
+            if (!button) return;
+            const buttonText = button.querySelector('.button-text');
+            const spinner = button.querySelector('.spinner');
+            button.disabled = isLoading;
+            if (buttonText) buttonText.classList.toggle('hidden', isLoading);
+            if (spinner) spinner.classList.toggle('hidden', !isLoading);
+        }
+
+        function showModal(content) {
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = `<div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 modal-overlay"><div class="bg-white rounded-lg shadow-xl w-full max-w-md modal-content">${content}</div></div>`;
+            modalContainer.querySelector('.modal-overlay').addEventListener('click', (e) => {
+                if (e.target === e.currentTarget) closeModal();
+            });
+        }
+
+        function closeModal() {
+            const modalContainer = document.getElementById('modal-container');
+            modalContainer.innerHTML = '';
+        }
+        document.addEventListener('closeModalEvent', closeModal);
+
+        // --- TEMPLATES ---
+        const authPageTemplate = `
+            <div class="min-h-screen flex">
+                <!-- Left Pane (Branding) -->
+                <div class="hidden lg:flex w-1/2 bg-gradient-to-br from-blue-600 to-blue-800 text-white items-center justify-center p-12 relative overflow-hidden">
+                    <div class="absolute bg-blue-500 rounded-full w-96 h-96 -top-20 -left-20 opacity-20"></div>
+                    <div class="absolute bg-blue-500 rounded-full w-72 h-72 -bottom-24 -right-10 opacity-20"></div>
+                    <div class="z-10">
+                        <h1 class="text-5xl font-bold leading-tight">Business Finance, Simplified.</h1>
+                        <p class="mt-4 text-lg text-blue-200">Your Digital Munshi is here to help you manage your finances with ease.</p>
+                        <ul class="mt-10 space-y-4">
+                            <li class="flex items-center gap-3">${ICONS.check}<span>Track daily transactions</span></li>
+                            <li class="flex items-center gap-3">${ICONS.check}<span>Prepare for payroll compliance</span></li>
+                            <li class="flex items-center gap-3">${ICONS.check}<span>Build your bank-ready credit kit</span></li>
+                        </ul>
+                    </div>
+                </div>
+                <!-- Right Pane (Auth Card) -->
+                <div class="w-full lg:w-1/2 flex flex-col items-center justify-center bg-gray-100 p-4">
+                    <div class="w-full max-w-sm">
+                        <div class="auth-card">
+                            <div class="auth-card-inner">
+                                <!-- Login Form -->
+                                <div class="auth-card-front bg-white p-8 rounded-2xl shadow-xl border">
+                                    <h1 class="text-3xl font-extrabold text-center brand-gradient-text">MSME Sahayak</h1>
+                                    <h2 class="text-2xl font-bold text-gray-800 text-center mt-8">Welcome Back</h2>
+                                    <form id="login-form" class="mt-8 space-y-6">
+                                        <div>
+                                            <label for="login-email" class="text-sm font-medium text-gray-700">Email Address</label>
+                                            <input id="login-email" name="email" type="email" autocomplete="email" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                        </div>
+                                        <div>
+                                            <label for="login-password" class="text-sm font-medium text-gray-700">Password</label>
+                                            <input id="login-password" name="password" type="password" autocomplete="current-password" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                        </div>
+                                        <button type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition">
+                                            <span class="button-text">Sign In</span>
+                                            <div class="spinner hidden"></div>
+                                        </button>
+                                    </form>
+                                    <p class="mt-6 text-center text-sm text-gray-600">
+                                        Don't have an account? <a href="#" id="show-register" class="font-medium text-blue-600 hover:text-blue-500">Sign Up</a>
+                                    </p>
+                                </div>
+                                <!-- Register Form -->
+                                <div class="auth-card-back bg-white p-8 rounded-2xl shadow-xl border">
+                                    <h1 class="text-3xl font-extrabold text-center brand-gradient-text">MSME Sahayak</h1>
+                                    <h2 class="text-2xl font-bold text-gray-800 text-center mt-8">Get Started</h2>
+                                    <form id="register-form" class="mt-8 space-y-6">
+                                        <div>
+                                            <label for="register-email" class="text-sm font-medium text-gray-700">Email Address</label>
+                                            <input id="register-email" name="email" type="email" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                        </div>
+                                        <div>
+                                            <label for="register-password" class="text-sm font-medium text-gray-700">Password</label>
+                                            <input id="register-password" name="password" type="password" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                                        </div>
+                                        <button type="submit" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition">
+                                            <span class="button-text">Sign Up</span>
+                                            <div class="spinner hidden"></div>
+                                        </button>
+                                    </form>
+                                    <p class="mt-6 text-center text-sm text-gray-600">
+                                        Already have an account? <a href="#" id="show-login" class="font-medium text-blue-600 hover:text-blue-500">Sign In</a>
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const mainAppTemplate = `
+            <div class="flex h-screen bg-gray-100">
+                <!-- Sidebar -->
+                <aside class="w-64 bg-white shadow-md flex-shrink-0 flex flex-col">
+                    <div class="p-6">
+                        <h1 class="text-3xl font-extrabold brand-gradient-text">MSME Sahayak</h1>
+                    </div>
+                    <nav class="mt-6 flex-grow">
+                        <a href="#dashboard" class="nav-link flex items-center gap-4 px-6 py-3 text-gray-600 hover:bg-gray-100 transition">${ICONS.dashboard} <span data-translate="dashboard">Dashboard</span></a>
+                        <a href="#khata" class="nav-link flex items-center gap-4 px-6 py-3 text-gray-600 hover:bg-gray-100 transition">${ICONS.khata} <span data-translate="digitalKhata">Digital Khata</span></a>
+                        <a href="#payroll" class="nav-link flex items-center gap-4 px-6 py-3 text-gray-600 hover:bg-gray-100 transition">${ICONS.payroll} <span data-translate="payrollPrep">Payroll Prep</span></a>
+                        <a href="#credit-kit" class="nav-link flex items-center gap-4 px-6 py-3 text-gray-600 hover:bg-gray-100 transition">${ICONS.credit} <span data-translate="loanAdvisor">AI Loan Advisor</span></a>
+                        <a href="#schemes" class="nav-link flex items-center gap-4 px-6 py-3 text-gray-600 hover:bg-gray-100 transition">${ICONS.schemes} <span data-translate="schemeFinder">AI Scheme Finder</span></a>
+                    </nav>
+                    <div class="p-6">
+                         <button id="logout-button" class="w-full text-left flex items-center gap-4 px-4 py-3 text-gray-600 hover:bg-gray-100 rounded-lg transition"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg><span data-translate="logout">Logout</span></button>
+                    </div>
+                </aside>
+
+                <!-- Main Content -->
+                <main class="flex-1 flex flex-col">
+                    <header class="bg-white shadow-sm p-4 flex justify-between items-center flex-shrink-0 z-10">
+                        <div class="font-semibold text-gray-700" id="user-email"></div>
+                        <div class="flex items-center gap-4">
+                            <span>EN</span>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="language-toggle" class="sr-only peer">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                            <span>हि</span>
+                        </div>
+                    </header>
+                    <div id="main-content" class="flex-1 overflow-y-auto p-8"></div>
+                </main>
+            </div>
+        `;
+
+        // --- RENDER & LOGIC FUNCTIONS ---
+        function renderAuthPage() {
+            appRoot.innerHTML = authPageTemplate;
+            const authCard = document.querySelector('.auth-card');
+            document.getElementById('show-register').addEventListener('click', (e) => { e.preventDefault(); authCard.classList.add('is-flipped'); });
+            document.getElementById('show-login').addEventListener('click', (e) => { e.preventDefault(); authCard.classList.remove('is-flipped'); });
+
+            const loginForm = document.getElementById('login-form');
+            loginForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                toggleButtonLoading(loginForm.querySelector('button'), true);
+                try {
+                    const data = await api.login(loginForm.email.value, loginForm.password.value);
+                    localStorage.setItem('authToken', data.token);
+                    localStorage.setItem('userEmail', data.email);
+                    showNotification('Login successful!');
+                    renderMainApp();
+                } catch (error) {
+                    showNotification(error.message, 'error');
+                } finally {
+                    toggleButtonLoading(loginForm.querySelector('button'), false);
+                }
+            });
+
+            const registerForm = document.getElementById('register-form');
+            registerForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                toggleButtonLoading(registerForm.querySelector('button'), true);
+                try {
+                    await api.register(registerForm.email.value, registerForm.password.value);
+                    showNotification('Registration successful! Please log in.');
+                    registerForm.reset();
+                    authCard.classList.remove('is-flipped');
+                } catch (error) {
+                    showNotification(error.message, 'error');
+                } finally {
+                    toggleButtonLoading(registerForm.querySelector('button'), false);
+                }
+            });
+        }
+
+        async function renderMainApp() {
+            appRoot.innerHTML = mainAppTemplate;
+            document.getElementById('user-email').textContent = localStorage.getItem('userEmail');
+            document.getElementById('logout-button').addEventListener('click', () => {
+                localStorage.clear();
+                transactionsCache = []; schemesCache = []; employeesCache = [];
+                if(cashFlowChartInstance) cashFlowChartInstance.destroy();
+                showNotification('You have been logged out.');
+                renderAuthPage();
+            });
+            document.getElementById('language-toggle').addEventListener('change', (e) => {
+                currentLanguage = e.target.checked ? 'hi' : 'en';
+                updateTranslations();
+            });
+            window.addEventListener('hashchange', router);
+            router();
+            updateTranslations();
+        }
+
+        function router() {
+            const path = window.location.hash || '#dashboard';
+            document.querySelectorAll('.nav-link').forEach(link => link.classList.toggle('active', link.getAttribute('href') === path));
+            const routes = {
+                '#dashboard': renderDashboardPage,
+                '#khata': renderDigitalKhataPage,
+                '#payroll': renderPayrollPage,
+                '#credit-kit': renderAILoanEligibilityPage,
+                '#schemes': renderAISchemeFinderPage,
+            };
+            (routes[path] || routes['#dashboard'])();
+            updateTranslations();
+        }
+
+        function updateTranslations() {
+            document.querySelectorAll('[data-translate]').forEach(el => {
+                const key = el.dataset.translate;
+                if (translations[currentLanguage] && translations[currentLanguage][key]) {
+                    el.textContent = translations[currentLanguage][key];
+                }
+            });
+        }
+        
+        async function renderDashboardPage() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="page active">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-6" data-translate="dashboard">Dashboard</h2>
+                    <div id="dashboard-cards" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="bg-white p-6 rounded-xl shadow border skeleton"><div class="h-6 bg-gray-200 rounded w-3/4"></div><div class="h-10 bg-gray-200 rounded w-1/2 mt-4"></div></div>
+                        <div class="bg-white p-6 rounded-xl shadow border skeleton"><div class="h-6 bg-gray-200 rounded w-3/4"></div><div class="h-10 bg-gray-200 rounded w-1/2 mt-4"></div></div>
+                        <div class="bg-white p-6 rounded-xl shadow border skeleton"><div class="h-6 bg-gray-200 rounded w-3/4"></div><div class="h-10 bg-gray-200 rounded w-1/2 mt-4"></div></div>
+                    </div>
+                    <div class="mt-8 bg-white p-6 rounded-xl shadow border">
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">Cash Flow (Last 30 Days)</h3>
+                        <div class="relative h-96">
+                            <canvas id="cashFlowChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            `;
+            try {
+                if (transactionsCache.length === 0) {
+                    transactionsCache = await api.getTransactions();
+                }
+                const today = new Date().toISOString().slice(0, 10);
+                const todaysIncome = transactionsCache.filter(t => t.date === today && t.type === 'income').reduce((sum, t) => sum + parseFloat(t.amount), 0);
+                const todaysExpense = transactionsCache.filter(t => t.date === today && t.type === 'expense').reduce((sum, t) => sum + parseFloat(t.amount), 0);
+                const monthBalance = transactionsCache.reduce((bal, t) => bal + (t.type === 'income' ? parseFloat(t.amount) : -parseFloat(t.amount)), 0);
+
+                document.getElementById('dashboard-cards').innerHTML = `
+                    <div class="bg-white p-6 rounded-xl shadow-lg border transform hover:scale-105 transition-transform duration-300">
+                        <h3 class="text-lg font-semibold text-gray-600" data-translate="todaysIncome">Today's Income</h3>
+                        <p class="text-3xl font-bold text-green-600 mt-2">${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(todaysIncome)}</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-lg border transform hover:scale-105 transition-transform duration-300">
+                        <h3 class="text-lg font-semibold text-gray-600" data-translate="todaysExpenses">Today's Expenses</h3>
+                        <p class="text-3xl font-bold text-red-600 mt-2">${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(todaysExpense)}</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-lg border transform hover:scale-105 transition-transform duration-300">
+                        <h3 class="text-lg font-semibold text-gray-600" data-translate="monthToDateBalance">Month-to-Date Balance</h3>
+                        <p class="text-3xl font-bold text-blue-800 mt-2">${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(monthBalance)}</p>
+                    </div>
+                `;
+                initializeChart();
+            } catch (error) {
+                mainContent.innerHTML = `<p class="text-red-500">Could not load dashboard data.</p>`;
+            }
+            updateTranslations();
+        }
+
+        function initializeChart() {
+            const chartEl = document.getElementById('cashFlowChart');
+            if(!chartEl) return;
+            const ctx = chartEl.getContext('2d');
+            if (cashFlowChartInstance) {
+                cashFlowChartInstance.destroy();
+            }
+            const labels = [...Array(30)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - i); return d.toLocaleDateString('en-CA'); }).reverse();
+            const incomeData = labels.map(label => transactionsCache.filter(t => t.date === label && t.type === 'income').reduce((sum, t) => sum + parseFloat(t.amount), 0));
+            const expenseData = labels.map(label => transactionsCache.filter(t => t.date === label && t.type === 'expense').reduce((sum, t) => sum + parseFloat(t.amount), 0));
+
+            cashFlowChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        { label: 'Income', data: incomeData, borderColor: 'rgb(22, 163, 74)', backgroundColor: 'rgba(22, 163, 74, 0.1)', fill: true, tension: 0.4 },
+                        { label: 'Expense', data: expenseData, borderColor: 'rgb(220, 38, 38)', backgroundColor: 'rgba(220, 38, 38, 0.1)', fill: true, tension: 0.4 }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+        }
+        
+        async function renderDigitalKhataPage() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="page active">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-3xl font-bold text-gray-800" data-translate="digitalKhata">Digital Khata</h2>
+                        <button id="add-entry-btn" class="bg-blue-600 text-white font-semibold px-6 py-2 rounded-lg hover:bg-blue-700 transition" data-translate="addEntry">Add Entry</button>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-lg border">
+                        <div class="flex gap-4 mb-4">
+                            <input id="search-input" type="text" class="flex-grow p-2 border rounded-lg" placeholder="Search by party name...">
+                            <select id="filter-select" class="p-2 border rounded-lg bg-white">
+                                <option value="all">All</option><option value="income">Income</option><option value="expense">Expense</option>
+                            </select>
+                        </div>
+                        <div id="transactions-list"><div class="text-center py-16 px-6 skeleton"><div class="h-10 w-10 mx-auto bg-gray-200 rounded-full"></div><div class="h-6 w-1/2 mx-auto mt-4 bg-gray-200 rounded"></div></div></div>
+                    </div>
+                </div>`;
+
+            if (transactionsCache.length === 0) {
+                transactionsCache = await api.getTransactions();
+            }
+            renderTransactions();
+
+            document.getElementById('search-input').addEventListener('input', renderTransactions);
+            document.getElementById('filter-select').addEventListener('change', renderTransactions);
+            document.getElementById('add-entry-btn').addEventListener('click', () => {
+                showModal(`
+                    <form id="transaction-form" class="p-8">
+                        <h3 class="text-xl font-bold text-gray-800 mb-6">New Transaction</h3>
+                        <div class="space-y-4">
+                            <div><label class="text-sm font-medium">Date</label><input type="date" name="date" required class="mt-1 w-full p-2 border rounded-lg" value="${new Date().toISOString().slice(0, 10)}"></div>
+                            <div><label class="text-sm font-medium">Party Name</label><input type="text" name="partyName" required class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., Customer A"></div>
+                            <div><label class="text-sm font-medium">Details</label><input type="text" name="details" class="mt-1 w-full p-2 border rounded-lg" placeholder="Optional notes"></div>
+                            <div><label class="text-sm font-medium">Amount (₹)</label><input type="number" step="0.01" name="amount" required class="mt-1 w-full p-2 border rounded-lg" placeholder="0.00"></div>
+                            <div><label class="text-sm font-medium">Type</label><select name="type" required class="mt-1 w-full p-2 border rounded-lg bg-white"><option value="income">Income</option><option value="expense">Expense</option></select></div>
+                        </div>
+                        <div class="mt-6 flex justify-end gap-4">
+                            <button type="button" class="px-6 py-2 rounded-lg" onclick="document.dispatchEvent(new Event('closeModalEvent'))">Cancel</button>
+                            <button type="submit" class="bg-blue-600 text-white font-semibold px-6 py-2 rounded-lg hover:bg-blue-700 transition">Save</button>
+                        </div>
+                    </form>`);
+                
+                document.getElementById('transaction-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const form = e.target;
+                    const data = { date: form.date.value, partyName: form.partyName.value, details: form.details.value, amount: parseFloat(form.amount.value), type: form.type.value };
+                    try {
+                        const newTransaction = await api.addTransaction(data);
+                        transactionsCache.unshift(newTransaction);
+                        renderTransactions();
+                        transactionsCache = []; // Force dashboard refresh
+                        closeModal();
+                        showNotification('Transaction added successfully.');
+                    } catch (error) {
+                        showNotification(error.message, 'error');
+                    }
+                });
+            });
+            updateTranslations();
+        }
+
+        function renderTransactions() {
+            const listEl = document.getElementById('transactions-list');
+            const searchTerm = document.getElementById('search-input')?.value.toLowerCase() || '';
+            const filterType = document.getElementById('filter-select')?.value || 'all';
+
+            let filtered = transactionsCache;
+            if (searchTerm) filtered = filtered.filter(t => t.partyName.toLowerCase().includes(searchTerm));
+            if (filterType !== 'all') filtered = filtered.filter(t => t.type === filterType);
+
+            if (filtered.length === 0) {
+                listEl.innerHTML = `<div class="text-center py-16 px-6">${ICONS.empty}<h3 class="mt-4 text-lg font-semibold text-gray-800">No transactions found</h3><p class="mt-1 text-gray-500">Try adjusting your search or add a new entry.</p></div>`;
+                return;
+            }
+
+            listEl.innerHTML = `
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-gray-50"><tr><th class="p-3">Date</th><th class="p-3">Party Name</th><th class="p-3">Type</th><th class="p-3 text-right">Amount</th><th class="p-3"></th></tr></thead>
+                        <tbody>${filtered.map(t => `
+                            <tr class="border-b hover:bg-gray-50">
+                                <td class="p-3">${new Date(t.date).toLocaleDateString('en-GB')}</td>
+                                <td class="p-3 font-medium">${t.partyName}<p class="text-xs text-gray-500">${t.details || ''}</p></td>
+                                <td class="p-3"><span class="px-2 py-1 text-xs font-semibold rounded-full ${t.type === 'income' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">${t.type}</span></td>
+                                <td class="p-3 text-right font-semibold ${t.type === 'income' ? 'text-green-700' : 'text-red-700'}">${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(t.amount)}</td>
+                                <td class="p-3 text-right"><button class="delete-btn text-gray-400 hover:text-red-600" data-id="${t.id}">✖</button></td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+            
+            listEl.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const id = e.currentTarget.dataset.id;
+                    showModal(`
+                        <div class="p-8 text-center">
+                            <h3 class="text-xl font-bold text-gray-800">Are you sure?</h3>
+                            <p class="text-gray-600 mt-2">This transaction will be permanently deleted.</p>
+                            <div class="mt-6 flex justify-center gap-4">
+                                <button type="button" class="px-8 py-2 rounded-lg" onclick="document.dispatchEvent(new Event('closeModalEvent'))">Cancel</button>
+                                <button id="confirm-delete" class="bg-red-600 text-white font-semibold px-8 py-2 rounded-lg hover:bg-red-700 transition">Delete</button>
+                            </div>
+                        </div>`);
+                    document.getElementById('confirm-delete').onclick = async () => {
+                        try {
+                            await api.deleteTransaction(id);
+                            transactionsCache = transactionsCache.filter(t => t.id != id);
+                            renderTransactions();
+                            transactionsCache = []; // Force dashboard refresh
+                            closeModal();
+                            showNotification('Transaction deleted.');
+                        } catch (error) {
+                           showNotification(error.message, 'error');
+                        }
+                    };
+                });
+            });
+        }
+        
+        async function renderPayrollPage() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="page active">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-6" data-translate="payrollPrep">Payroll Preparation</h2>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg border">
+                            <h3 class="text-xl font-bold text-gray-800 mb-4" data-translate="manageEmployees">Manage Employees</h3>
+                            <form id="add-employee-form" class="flex gap-2 mb-4">
+                                <input type="text" name="name" class="flex-grow p-2 border rounded-lg" placeholder="Employee Name" required>
+                                <input type="number" name="salary" class="w-32 p-2 border rounded-lg" placeholder="Gross Salary" required>
+                                <button type="submit" class="bg-blue-600 text-white font-semibold px-4 rounded-lg hover:bg-blue-700 transition">+</button>
+                            </form>
+                            <div id="employee-list-container"></div>
+                        </div>
+                        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-lg border">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-xl font-bold text-gray-800">Compliance Report (TN)</h3>
+                                <button id="generate-report-btn" class="bg-green-600 text-white font-semibold px-6 py-2 rounded-lg hover:bg-green-700 transition flex items-center gap-2">
+                                    <span class="button-text" data-translate="generateReport">Generate Report</span>
+                                    <div class="spinner hidden"></div>
+                                 </button>
+                            </div>
+                            <div id="report-output" class="text-center text-gray-500 py-16">
+                                <p>Add and select employees, then click "Generate Report" to see compliance calculations.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            
+            renderEmployeeList();
+
+            document.getElementById('add-employee-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const form = e.currentTarget;
+                const name = form.name.value;
+                const salary = parseFloat(form.salary.value);
+                if (name.trim() && salary > 0) {
+                    employeesCache.push({ id: Date.now(), name, salary });
+                    renderEmployeeList();
+                    form.reset();
+                } else {
+                    showNotification('Please enter a valid name and salary.', 'error');
+                }
+            });
+
+            document.getElementById('generate-report-btn').addEventListener('click', async (e) => {
+                const selectedCheckboxes = document.querySelectorAll('.employee-checkbox:checked');
+                if (selectedCheckboxes.length === 0) {
+                    showNotification('Please select at least one employee to generate a report.', 'error');
+                    return;
+                }
+
+                const selectedEmployeeIds = Array.from(selectedCheckboxes).map(cb => parseInt(cb.dataset.id));
+                const selectedEmployees = employeesCache.filter(emp => selectedEmployeeIds.includes(emp.id));
+                
+                const btn = e.currentTarget;
+                toggleButtonLoading(btn, true);
+                try {
+                    const reportData = await api.getComplianceReport({ employees: selectedEmployees });
+                    renderComplianceReport(reportData);
+                } catch (error) {
+                    document.getElementById('report-output').innerHTML = `<div class="text-center py-16 px-6"><p class="text-red-500 font-semibold">Could not generate report.</p><p class="text-gray-500 mt-2">${error.message}</p></div>`;
+                    showNotification(error.message, 'error');
+                } finally {
+                    toggleButtonLoading(btn, false);
+                }
+            });
+            updateTranslations();
+        }
+
+        function renderEmployeeList() {
+            const containerEl = document.getElementById('employee-list-container');
+            if (!containerEl) return;
+            containerEl.innerHTML = `
+                <div class="flex justify-between items-center p-2 border-b mb-2">
+                    <label class="flex items-center gap-2 font-medium">
+                        <input type="checkbox" id="select-all-employees">
+                        <span data-translate="selectAll">Select All</span>
+                    </label>
+                </div>
+                <div id="employee-list" class="space-y-2 max-h-80 overflow-y-auto"></div>
+            `;
+            const listEl = document.getElementById('employee-list');
+            listEl.innerHTML = employeesCache.map(emp => `
+                <div class="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                    <label class="flex items-center gap-3 flex-grow">
+                        <input type="checkbox" class="employee-checkbox h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" data-id="${emp.id}">
+                        <div>
+                            <p class="font-medium">${emp.name}</p>
+                            <p class="text-sm text-gray-600">${new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(emp.salary)}</p>
+                        </div>
+                    </label>
+                    <button class="remove-employee-btn text-gray-400 hover:text-red-600" data-id="${emp.id}">✖</button>
+                </div>`).join('');
+
+            document.getElementById('select-all-employees').addEventListener('change', (e) => {
+                document.querySelectorAll('.employee-checkbox').forEach(checkbox => {
+                    checkbox.checked = e.target.checked;
+                });
+            });
+
+            document.querySelectorAll('.remove-employee-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const id = parseInt(e.currentTarget.dataset.id);
+                    employeesCache = employeesCache.filter(emp => emp.id !== id);
+                    renderEmployeeList();
+                });
+            });
+            updateTranslations();
+        }
+
+        function renderComplianceReport(reportData) {
+            const outputEl = document.getElementById('report-output');
+            outputEl.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <p class="text-sm text-gray-600">Generated report for ${reportData.length} selected employees.</p>
+                    <button id="download-excel-btn" class="bg-orange-500 text-white font-semibold px-4 py-2 rounded-lg hover:bg-orange-600 transition" data-translate="downloadExcel">Download as Excel</button>
+                </div>
+                <div class="overflow-x-auto mt-4">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="p-2">Employee</th><th class="p-2">Salary</th><th class="p-2">EPF (Empl)</th>
+                                <th class="p-2">ESI (Empl)</th><th class="p-2">Prof. Tax</th><th class="p-2">Take Home</th>
+                                <th class="p-2">EPF (Emplr)</th><th class="p-2">ESI (Emplr)</th>
+                            </tr>
+                        </thead>
+                        <tbody>${reportData.map(row => `
+                            <tr class="border-b">
+                                <td class="p-2 font-medium">${row.name}</td>
+                                <td class="p-2">${row.salary.toFixed(2)}</td>
+                                <td class="p-2 text-red-600">${row.epf_employee.toFixed(2)}</td>
+                                <td class="p-2 text-red-600">${row.esi_employee.toFixed(2)}</td>
+                                <td class="p-2 text-red-600">${row.prof_tax.toFixed(2)}</td>
+                                <td class="p-2 font-bold text-green-700">${row.take_home.toFixed(2)}</td>
+                                <td class="p-2 text-blue-600">${row.epf_employer.toFixed(2)}</td>
+                                <td class="p-2 text-blue-600">${row.esi_employer.toFixed(2)}</td>
+                            </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>`;
+
+            document.getElementById('download-excel-btn').addEventListener('click', () => {
+                const worksheet = XLSX.utils.json_to_sheet(reportData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Compliance Report");
+                XLSX.writeFile(workbook, "Compliance_Report_TN.xlsx");
+                showNotification('Downloading Excel file...');
+            });
+            updateTranslations();
+        }
+        
+        async function renderAILoanEligibilityPage() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="page active">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-6" data-translate="loanAdvisor">AI Loan Eligibility Advisor</h2>
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <!-- Input Form -->
+                        <div class="bg-white p-8 rounded-xl shadow-lg border">
+                            <h3 class="text-xl font-bold text-gray-800">Enter Your Business Details</h3>
+                            <p class="text-gray-600 mt-2 mb-6">Provide key metrics for our AI to analyze your loan eligibility.</p>
+                            <form id="eligibility-form" class="space-y-4">
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div><label class="font-medium text-sm">Annual Turnover (₹)</label><input type="number" name="turnover" required class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., 5000000"></div>
+                                    <div><label class="font-medium text-sm">Annual Net Profit (₹)</label><input type="number" name="profit" required class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., 500000"></div>
+                                    <div><label class="font-medium text-sm">Years in Business</label><input type="number" name="years" required class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., 3"></div>
+                                    <div><label class="font-medium text-sm">Desired Loan (₹)</label><input type="number" name="amount" required class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., 1000000"></div>
+                                </div>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div><label class="font-medium text-sm">Type of Business</label><select name="businessType" class="mt-1 w-full p-2 border rounded-lg bg-white"><option>Trading</option><option>Manufacturing</option><option>Service</option></select></div>
+                                    <div><label class="font-medium text-sm">Credit Score (optional)</label><input type="number" name="creditScore" class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., 750"></div>
+                                </div>
+                                <div><label class="font-medium text-sm">Collateral Available?</label><select name="collateral" class="mt-1 w-full p-2 border rounded-lg bg-white"><option>No</option><option>Yes</option></select></div>
+                                <div><label class="font-medium text-sm">Any Existing Loans?</label><select name="existingLoans" id="existing-loans-select" class="mt-1 w-full p-2 border rounded-lg bg-white"><option>No</option><option>Yes</option></select></div>
+                                
+                                <div id="existing-loan-details-container" class="hidden space-y-4 border-t pt-4 mt-4">
+                                    <h4 class="font-semibold text-gray-700">Existing Loan Details</h4>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="font-medium text-sm">Type of Loan</label>
+                                            <select name="loanType" class="mt-1 w-full p-2 border rounded-lg bg-white">
+                                                <option>Business Loan</option><option>Personal Loan</option><option>Vehicle Loan</option><option>Home Loan</option><option>Other</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="font-medium text-sm">Bank Name</label>
+                                            <input type="text" name="bankName" class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., SBI">
+                                        </div>
+                                        <div>
+                                            <label class="font-medium text-sm">Outstanding Amount (₹)</label>
+                                            <input type="number" name="outstandingAmount" class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., 200000">
+                                        </div>
+                                        <div>
+                                            <label class="font-medium text-sm">Remaining Tenure (months)</label>
+                                            <input type="number" name="remainingTenure" class="mt-1 w-full p-2 border rounded-lg" placeholder="e.g., 24">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div><label class="font-medium text-sm">Purpose of this Loan</label><textarea name="loanPurpose" required class="mt-1 w-full p-2 border rounded-lg h-24" placeholder="e.g., To purchase new machinery and increase production capacity."></textarea></div>
+                                <button type="submit" class="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg hover:bg-blue-700 transition flex items-center justify-center gap-2">
+                                    <span class="button-text">Analyze with AI</span>
+                                    <div class="spinner hidden"></div>
+                                </button>
+                            </form>
+                        </div>
+                        <!-- AI Response Area -->
+                        <div id="ai-eligibility-response" class="bg-white p-8 rounded-xl shadow-lg border">
+                            <h3 class="text-xl font-bold text-gray-800">AI Eligibility Scorecard</h3>
+                            <div class="mt-4 text-gray-500">Your eligibility scorecard will appear here...</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('existing-loans-select').addEventListener('change', (e) => {
+                document.getElementById('existing-loan-details-container').classList.toggle('hidden', e.target.value === 'No');
+            });
+
+            document.getElementById('eligibility-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.currentTarget;
+                const button = form.querySelector('button[type="submit"]');
+
+                let existingLoanDetailsString = "Not Applicable";
+                if (form.existingLoans.value === 'Yes') {
+                    const loanType = form.loanType.value;
+                    const bankName = form.bankName.value;
+                    const outstandingAmount = form.outstandingAmount.value;
+                    const remainingTenure = form.remainingTenure.value;
+
+                    if (!loanType || !bankName || !outstandingAmount || !remainingTenure) {
+                        showNotification('Please fill in all the details for your existing loan.', 'error');
+                        return;
+                    }
+                    existingLoanDetailsString = `Loan Type: ${loanType}, Bank: ${bankName}, Outstanding Amount: ₹${outstandingAmount}, Remaining Tenure: ${remainingTenure} months.`;
+                }
+
+                const data = { 
+                    turnover: form.turnover.value, profit: form.profit.value, years: form.years.value, amount: form.amount.value, 
+                    businessType: form.businessType.value, collateral: form.collateral.value, existingLoans: form.existingLoans.value, 
+                    existingLoanDetails: existingLoanDetailsString, creditScore: form.creditScore.value, loanPurpose: form.loanPurpose.value,
+                    language: currentLanguage
+                };
+                
+                const responseArea = document.getElementById('ai-eligibility-response');
+                responseArea.innerHTML = `<div class="flex items-center justify-center h-full"><div class="spinner !w-12 !h-12 !border-4"></div></div>`;
+                toggleButtonLoading(button, true);
+                try {
+                    const result = await api.checkEligibility(data);
+                    responseArea.innerHTML = `<h3 class="text-xl font-bold text-gray-800">AI Eligibility Scorecard</h3><div class="prose mt-4">${marked.parse(result.analysis)}</div>`;
+                } catch (error) {
+                    responseArea.innerHTML = `<p class="text-red-500 font-semibold">Error:</p><p class="text-gray-600">${error.message}</p>`;
+                } finally {
+                    toggleButtonLoading(button, false);
+                }
+            });
+            updateTranslations();
+        }
+
+        async function renderAISchemeFinderPage() {
+            const mainContent = document.getElementById('main-content');
+            mainContent.innerHTML = `
+                <div class="page active">
+                    <h2 class="text-3xl font-bold text-gray-800 mb-6" data-translate="schemeFinder">AI Government Scheme Finder</h2>
+                     <div class="bg-white p-8 rounded-xl shadow-lg border max-w-3xl mx-auto">
+                        <h3 class="text-xl font-bold text-gray-800">Describe Your Business</h3>
+                        <p class="text-gray-600 mt-2 mb-6">Tell our AI about your business, and it will use Google Search to find relevant government schemes for you.</p>
+                        <form id="scheme-finder-form">
+                            <textarea name="description" class="w-full p-3 border rounded-lg h-32" placeholder="e.g., I run a small textile manufacturing unit in Tiruppur, Tamil Nadu, with 15 employees and want to upgrade my machinery." required></textarea>
+                            <button type="submit" class="mt-4 w-full bg-blue-600 text-white font-semibold py-3 rounded-lg hover:bg-blue-700 transition flex items-center justify-center gap-2">
+                                <span class="button-text">Find Schemes with AI</span>
+                                <div class="spinner hidden"></div>
+                            </button>
+                        </form>
+                    </div>
+                    <div id="ai-schemes-response" class="mt-8 bg-white p-8 rounded-xl shadow-lg border max-w-3xl mx-auto hidden"></div>
+                </div>
+            `;
+
+            document.getElementById('scheme-finder-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const form = e.currentTarget;
+                const data = { 
+                    businessDescription: form.description.value,
+                    language: currentLanguage
+                };
+                const responseArea = document.getElementById('ai-schemes-response');
+                responseArea.classList.remove('hidden');
+                responseArea.innerHTML = `<div class="flex items-center justify-center h-full"><div class="spinner !w-12 !h-12 !border-4"></div></div>`;
+                toggleButtonLoading(form.querySelector('button'), true);
+                try {
+                    const result = await api.findSchemes(data);
+                    let sourcesHTML = result.sources.map(source => `<li><a href="${source.uri}" target="_blank" class="text-blue-600 hover:underline">${source.title}</a></li>`).join('');
+                    responseArea.innerHTML = `
+                        <h3 class="text-xl font-bold text-gray-800">Relevant Schemes Found</h3>
+                        <div class="prose mt-4">${marked.parse(result.schemes)}</div>
+                        <h3 class="text-lg font-bold text-gray-800 mt-6">Sources</h3>
+                        <ul class="list-disc pl-5 mt-2 space-y-1">${sourcesHTML}</ul>`;
+                } catch (error) {
+                    responseArea.innerHTML = `<p class="text-red-500 font-semibold">Error:</p><p class="text-gray-600">${error.message}</p>`;
+                } finally {
+                    toggleButtonLoading(form.querySelector('button'), false);
+                }
+            });
+            updateTranslations();
+        }
+        
+        // --- INITIALIZATION ---
+        function init() {
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                renderMainApp();
+            } else {
+                renderAuthPage();
+            }
+        }
+
+        init();
+    });
+    </script>
+</body>
+</html>
+
